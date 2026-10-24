@@ -31,7 +31,9 @@ The code is in [`apps-script/`](apps-script):
 ## Using it
 
 - **Now** sends the email immediately.
-- **Later** lets you pick a date, time and repeat option, then tap **Schedule**.
+- **Later** lets you pick a repeat option, then tap **Schedule**:
+  - **Several times a day (evenly spaced)**: choose how many emails per day and a time window. They're spread evenly across it, every day, until you cancel. Example: 8 per day with From and To both 12:00 AM sends every 3 hours around the clock. 6 per day from 8:00 AM to 8:00 PM sends every 2 hours (8, 10, 12, 2, 4, 6).
+  - **Never, Every day, Weekdays, Every week, Every month**: pick a date and time for the first send.
 - **Scheduled** lists upcoming emails and when each one goes out next. Tap **Cancel** to stop one.
 
 Scheduled emails arrive within about a minute of the chosen time. The scheduler only runs while something is scheduled.
@@ -43,5 +45,5 @@ After you paste in changes, click **Deploy → Manage deployments → ✏️ Edi
 ## Notes and limits
 
 - With access set to **Only myself**, nobody else can open the page or send through it, and it only ever emails your own address.
-- Free Gmail accounts can send up to about 100 emails a day from Apps Script.
+- Free Gmail accounts can send up to about 100 emails a day from Apps Script. The app refuses a schedule that would push your total above 100 a day, and keeps evenly spaced emails at least 5 minutes apart.
 - Subjects can be up to 250 characters and messages up to 5,000.

@@ -80,6 +80,8 @@
     .info span { color: var(--muted); font-size: 14px; }
     .cancel { border: 1px solid var(--border); background: transparent; color: var(--accent); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 14px; }
     .empty { color: var(--muted); font-size: 15px; margin: 0; }
+    .hint { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+    #perDayFields, #dateField { margin-top: 14px; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -105,21 +107,38 @@
       </div>
     </div>
     <div id="laterFields" hidden>
-      <div class="row">
-        <div class="field">
-          <label for="sendAt">Date &amp; time</label>
-          <input id="sendAt" type="datetime-local">
-        </div>
-      </div>
       <div class="field">
         <label for="repeat">Repeat</label>
         <select id="repeat">
+          <option value="perday">Several times a day (evenly spaced)</option>
           <option value="none">Never</option>
           <option value="daily">Every day</option>
           <option value="weekdays">Every weekday (Mon–Fri)</option>
           <option value="weekly">Every week</option>
           <option value="monthly">Every month</option>
         </select>
+      </div>
+      <div id="dateField" class="field" hidden>
+        <label for="sendAt">Date &amp; time</label>
+        <input id="sendAt" type="datetime-local">
+      </div>
+      <div id="perDayFields">
+        <div class="field">
+          <label for="timesPerDay">Emails per day</label>
+          <input id="timesPerDay" type="number" inputmode="numeric" min="1" max="100" value="4">
+        </div>
+        <div class="field row">
+          <div class="field">
+            <label for="fromTime">From</label>
+            <input id="fromTime" type="time" value="00:00">
+          </div>
+          <div class="field">
+            <label for="toTime">To</label>
+            <input id="toTime" type="time" value="00:00">
+          </div>
+        </div>
+        <p class="hint">Same From and To time = the whole day. Repeats every day until you cancel it.</p>
+        <p class="hint" id="preview"></p>
       </div>
     </div>
     <button class="primary" id="submit" type="submit">Send now</button>
@@ -139,6 +158,50 @@
     none: 'Once', daily: 'Every day', weekdays: 'Weekdays',
     weekly: 'Every week', monthly: 'Every month',
   };
+  const repeatLabel = (item) =>
+    item.repeat === 'perday' ? item.timesPerDay + '× a day' : REPEAT_LABELS[item.repeat];
+
+  const toMinutes = (hhmm) => {
+    const [h, m] = (hhmm || '00:00').split(':').map(Number);
+    return h * 60 + m;
+  };
+
+  // Mirrors nextSlot_ in Code.gs: evenly spaced slots across the window.
+  function slotTimes() {
+    const n = Math.floor(Number($('timesPerDay').value));
+    const from = toMinutes($('fromTime').value);
+    const to = toMinutes($('toTime').value);
+    const windowLen = (to - from + 1440) % 1440 || 1440;
+    if (!(n >= 1 && n <= 100)) return { error: 'Choose between 1 and 100 emails per day.' };
+    const gap = windowLen / n;
+    if (gap < 5) return { error: 'Too many for that window — keep them at least 5 minutes apart.' };
+    const times = [];
+    for (let i = 0; i < n; i++) {
+      const d = new Date(2000, 0, 1, 0, Math.round(from + i * gap));
+      times.push(d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }));
+    }
+    return { times, gap, from, to };
+  }
+
+  function updatePreview() {
+    const r = slotTimes();
+    if (r.error) { $('preview').textContent = r.error; return; }
+    const every = r.gap >= 60
+      ? (Math.round(r.gap / 6) / 10) + ' hours'
+      : Math.round(r.gap) + ' minutes';
+    const shown = r.times.length > 12 ? r.times.slice(0, 12).join(', ') + ', …' : r.times.join(', ');
+    $('preview').textContent = 'Every ' + every + ': ' + shown;
+  }
+
+  function updateRepeatFields() {
+    const perDay = $('repeat').value === 'perday';
+    $('perDayFields').hidden = !perDay;
+    $('dateField').hidden = perDay;
+    if (!perDay && !$('sendAt').value) $('sendAt').value = defaultTime();
+    updatePreview();
+  }
+  ['timesPerDay', 'fromTime', 'toTime'].forEach((id) => $(id).addEventListener('input', updatePreview));
+  $('repeat').addEventListener('change', updateRepeatFields);
   let when = 'now';
 
   // Promise wrapper around google.script.run
@@ -179,7 +242,7 @@
         b.setAttribute('aria-pressed', String(b === btn)));
       $('laterFields').hidden = when !== 'later';
       $('submit').textContent = when === 'now' ? 'Send now' : 'Schedule';
-      if (when === 'later' && !$('sendAt').value) $('sendAt').value = defaultTime();
+      if (when === 'later') updateRepeatFields();
       setStatus('');
     });
   });
@@ -195,10 +258,21 @@
         await call('sendNow', subject, body);
         setStatus('Sent! Check your inbox.', 'ok');
       } else {
-        if (!$('sendAt').value) throw new Error('Pick a date and time.');
-        const sendAt = new Date($('sendAt').value).getTime();
-        await call('scheduleEmail', { subject, body, sendAt, repeat: $('repeat').value });
-        setStatus('Scheduled for ' + formatTime(sendAt) + '.', 'ok');
+        const repeat = $('repeat').value;
+        let saved;
+        if (repeat === 'perday') {
+          const r = slotTimes();
+          if (r.error) throw new Error(r.error);
+          saved = await call('scheduleEmail', {
+            subject, body, repeat,
+            timesPerDay: Number($('timesPerDay').value), fromMinute: r.from, toMinute: r.to,
+          });
+        } else {
+          if (!$('sendAt').value) throw new Error('Pick a date and time.');
+          const sendAt = new Date($('sendAt').value).getTime();
+          saved = await call('scheduleEmail', { subject, body, sendAt, repeat });
+        }
+        setStatus('Scheduled — first one ' + formatTime(saved.sendAt) + '.', 'ok');
         loadList();
       }
       $('subject').value = '';
@@ -222,7 +296,7 @@
         const title = document.createElement('strong');
         title.textContent = item.subject;
         const meta = document.createElement('span');
-        meta.textContent = REPEAT_LABELS[item.repeat] + ' · next ' + formatTime(item.sendAt);
+        meta.textContent = repeatLabel(item) + ' · next ' + formatTime(item.sendAt);
         info.append(title, meta);
 
         const cancel = document.createElement('button');

@@ -11,7 +11,9 @@
 const KEY_PREFIX = 'email_';
 const TRIGGER_HANDLER = 'processDueEmails';
 const CHECK_EVERY_MINUTES = 1; // Allowed values: 1, 5, 10, 15, 30
-const REPEATS = ['none', 'daily', 'weekdays', 'weekly', 'monthly'];
+const REPEATS = ['none', 'daily', 'weekdays', 'weekly', 'monthly', 'perday'];
+const DAILY_SEND_LIMIT = 100; // Gmail's daily Apps Script limit for free accounts
+const MIN_GAP_MINUTES = 5; // Shortest spacing allowed for "several times a day"
 const MAX_SUBJECT = 250;
 const MAX_BODY = 5000; // Keeps each stored email under the 9 KB property limit
 
@@ -41,22 +43,37 @@ function sendNow(subject, body) {
 
 function scheduleEmail(item) {
   validate_(item.subject, item.body);
-  const sendAt = Number(item.sendAt);
-  if (!sendAt) throw new Error('Pick a date and time.');
   if (REPEATS.indexOf(item.repeat) === -1) throw new Error('Unknown repeat option.');
-  if (item.repeat === 'none' && sendAt <= Date.now()) {
-    throw new Error('That time is in the past.');
-  }
 
   const email = {
     id: Utilities.getUuid(),
     subject: item.subject,
     body: item.body,
-    sendAt: sendAt,
     repeat: item.repeat,
-    dayOfMonth: new Date(sendAt).getDate(),
   };
+
+  if (item.repeat === 'perday') {
+    // Spread evenly across a daily time window, forever (until cancelled).
+    email.timesPerDay = Math.floor(Number(item.timesPerDay));
+    email.fromMinute = Math.floor(Number(item.fromMinute));
+    email.toMinute = Math.floor(Number(item.toMinute));
+    validatePerDay_(email);
+    email.sendAt = nextSlot_(Date.now(), email);
+  } else {
+    email.sendAt = Number(item.sendAt);
+    if (!email.sendAt) throw new Error('Pick a date and time.');
+    if (item.repeat === 'none' && email.sendAt <= Date.now()) {
+      throw new Error('That time is in the past.');
+    }
+    email.dayOfMonth = new Date(email.sendAt).getDate();
+  }
+
   withLock_(function () {
+    const perDay = readAll_().reduce(function (sum, e) { return sum + emailsPerDay_(e); }, 0);
+    if (perDay + emailsPerDay_(email) > DAILY_SEND_LIMIT) {
+      throw new Error('That would go over Gmail\'s limit of ' + DAILY_SEND_LIMIT +
+        ' emails a day (already scheduled: about ' + perDay + ' a day).');
+    }
     store_().setProperty(KEY_PREFIX + email.id, JSON.stringify(email));
   });
   ensureTrigger_();
@@ -114,6 +131,7 @@ function processDueEmails() {
 
 /** Next occurrence after `ms`. Uses the script's time zone (Project Settings). */
 function nextTime_(ms, email) {
+  if (email.repeat === 'perday') return nextSlot_(ms, email);
   const d = new Date(ms);
   switch (email.repeat) {
     case 'daily':
@@ -137,6 +155,49 @@ function nextTime_(ms, email) {
     }
   }
   return d.getTime();
+}
+
+/**
+ * First slot strictly after `after` for a "several times a day" email.
+ * Slots are evenly spaced across the window [fromMinute, toMinute) each day;
+ * from == to means the whole day, and to < from wraps past midnight.
+ */
+function nextSlot_(after, email) {
+  const gap = windowMinutes_(email) / email.timesPerDay;
+  const base = new Date(after);
+  // Start from yesterday so a window that runs past midnight is covered.
+  for (let day = -1; day <= 1; day++) {
+    for (let i = 0; i < email.timesPerDay; i++) {
+      const t = new Date(base.getFullYear(), base.getMonth(), base.getDate() + day,
+        0, Math.round(email.fromMinute + i * gap)).getTime();
+      if (t > after) return t;
+    }
+  }
+  throw new Error('Could not find the next send time.');
+}
+
+function windowMinutes_(email) {
+  return (email.toMinute - email.fromMinute + 1440) % 1440 || 1440;
+}
+
+function validatePerDay_(email) {
+  const n = email.timesPerDay;
+  if (!(n >= 1 && n <= DAILY_SEND_LIMIT)) {
+    throw new Error('Times per day must be between 1 and ' + DAILY_SEND_LIMIT + '.');
+  }
+  [email.fromMinute, email.toMinute].forEach(function (m) {
+    if (!(m >= 0 && m < 1440)) throw new Error('Pick valid start and end times.');
+  });
+  if (windowMinutes_(email) / n < MIN_GAP_MINUTES) {
+    throw new Error('Too many emails for that time window (keep them at least ' +
+      MIN_GAP_MINUTES + ' minutes apart).');
+  }
+}
+
+/** Roughly how many emails a schedule sends per day, for the quota check. */
+function emailsPerDay_(email) {
+  if (email.repeat === 'perday') return email.timesPerDay;
+  return email.repeat === 'none' ? 0 : 1;
 }
 
 function validate_(subject, body) {
