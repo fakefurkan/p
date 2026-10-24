@@ -34,7 +34,7 @@ The code is in [`apps-script/`](apps-script):
 - **Later** lets you pick a date, time and repeat option, then tap **Schedule**.
 - **Scheduled** lists upcoming emails and when each one goes out next. Tap **Cancel** to stop one.
 
-Scheduled emails arrive within about 5 minutes of the chosen time. To make that more precise, change `CHECK_EVERY_MINUTES` in `Code.gs` to `1`.
+Scheduled emails arrive within about a minute of the chosen time. The scheduler only runs while something is scheduled.
 
 ## Updating the code later
 

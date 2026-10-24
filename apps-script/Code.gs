@@ -10,7 +10,7 @@
 
 const KEY_PREFIX = 'email_';
 const TRIGGER_HANDLER = 'processDueEmails';
-const CHECK_EVERY_MINUTES = 5; // Allowed values: 1, 5, 10, 15, 30
+const CHECK_EVERY_MINUTES = 1; // Allowed values: 1, 5, 10, 15, 30
 const REPEATS = ['none', 'daily', 'weekdays', 'weekly', 'monthly'];
 const MAX_SUBJECT = 250;
 const MAX_BODY = 5000; // Keeps each stored email under the 9 KB property limit
